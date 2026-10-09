@@ -5,12 +5,27 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from evalhub.adapter import JobSpec
-from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
+from evalhub.adapter.auth import resolve_model_credentials
 
 from _benchmarks import PETRI_SEED_MAP
-from _routing import _is_ollama_endpoint, role_model_spec, route_model, select_client, target_model_spec
+from _hf_auth import apply_hf_hub_auth, refresh_hf_hub_auth
+from _hf_offline import (
+    TEST_DATA_DIR,
+    configure_hf_offline_environment,
+    ensure_test_data_ready_for_offline,
+    should_use_hf_offline,
+)
+from _routing import (
+    _is_ollama_endpoint,
+    grader_model_spec,
+    role_model_spec,
+    route_model,
+    select_client,
+    target_model_spec,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,19 +74,40 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
     if anthropic_key:
         env["ANTHROPIC_API_KEY"] = anthropic_key
 
+    # StrongREJECT can use an independent grader endpoint and credential. The
+    # key is supplied by the runtime (e.g. a Secret-backed env var), never by a
+    # job parameter, so it is not persisted in the job spec or CLI arguments.
+    if p.get("grader_model") and config.benchmark_id == "inspect/strong-reject":
+        grader_key = env.get("OPENAI_JUDGE_API_KEY", "").strip()
+        if not grader_key:
+            raise ValueError(
+                "parameters.grader_model requires OPENAI_JUDGE_API_KEY in the adapter environment. "
+                "Provide it from a Kubernetes Secret; do not put API keys in the evaluation YAML."
+            )
+        env["OPENAI_JUDGE_API_KEY"] = grader_key
+        env["OPENAI_JUDGE_BASE_URL"] = (
+            p.get("grader_base_url")
+            or env.get("OPENAI_JUDGE_BASE_URL")
+            or "https://api.openai.com/v1"
+        )
+
     # ANTHROPIC_BASE_URL passes through from host env.
 
     if mode not in ("petri", "bloom"):
         client = select_client(env, endpoint_url=config.model.url)
         env["INSPECT_EVAL_MODEL"] = route_model(config.model.name, client)
 
-    # Inject HF_TOKEN from sidecar-mounted secret if not already in env.
-    # inspect-evals benchmarks (e.g. humaneval) download datasets from HF Hub.
-    if not env.get("HF_TOKEN"):
-        hf_token = read_model_auth_key("hf-token")
-        if hf_token:
-            env["HF_TOKEN"] = hf_token
-            logger.info("Injected HF_TOKEN from mounted secret")
+    # Staged S3/PVC/git test data (test_data_ref) or tokenizer+/test_data layout → offline Hub.
+    if should_use_hf_offline(p):
+        configure_hf_offline_environment(TEST_DATA_DIR, env)
+        logger.info(
+            "HF offline mode: HF_HOME=%s (staged test data), Hub downloads disabled",
+            TEST_DATA_DIR,
+        )
+
+    # Gated datasets (Open-Telco, humaneval, mmlu, …) need Hub auth when not offline.
+    if env.get("HF_HUB_OFFLINE") != "1":
+        apply_hf_hub_auth(env)
 
     env["INSPECT_NO_TELEMETRY"] = "1"
     return env
@@ -120,14 +156,29 @@ def build_command(
         for role, spec in model_roles.items():
             cmd += ["--model-role", f"{role}={spec}"]
 
+        # StrongREJECT's task-specific judge_llm argument otherwise bypasses
+        # Inspect's named grader role. Setting it to None activates the task's
+        # grader-role fallback; the model itself is routed through the isolated
+        # openai_judge provider namespace above.
+        grader_model = config.parameters.get("grader_model")
+        if grader_model and config.benchmark_id == "inspect/strong-reject":
+            if not isinstance(grader_model, str) or not grader_model.strip():
+                raise ValueError("parameters.grader_model must be a non-empty model name")
+            if "grader" in model_roles:
+                raise ValueError(
+                    "Configure the StrongREJECT grader with parameters.grader_model, "
+                    "not both grader_model and model_roles.grader."
+                )
+            # Insert the role before task args are appended below.
+            cmd += ["--model-role", f"grader={grader_model_spec(grader_model.strip())}"]
+
     max_tasks = config.parameters.get("max_tasks")
     if max_tasks:
         cmd += ["--max-tasks", str(max_tasks)]
 
-    # Sample limit from JobSpec.num_examples (lifted from benchmarks[].parameters.num_examples).
-    # Default to 5 when unset so Petri/Bloom (and large datasets) do not run unbounded.
-    limit = int(config.num_examples) if config.num_examples is not None else 5
-    cmd += ["--limit", str(limit)]
+    limit = _sample_limit(config, mode)
+    if limit is not None:
+        cmd += ["--limit", str(limit)]
 
     epochs = config.parameters.get("epochs")
     if epochs and epochs > 1:
@@ -135,7 +186,13 @@ def build_command(
 
     cmd += ["--log-level", config.parameters.get("log_level", "info")]
 
-    for key, value in _task_args(config).items():
+    task_args = _task_args(config)
+    if config.benchmark_id == "inspect/strong-reject" and config.parameters.get("grader_model"):
+        # Ignore a legacy explicit judge_llm (often set to the target model) so
+        # StrongREJECT uses the separately configured grader role.
+        task_args["judge_llm"] = None
+
+    for key, value in task_args.items():
         if isinstance(value, bool):
             value = str(value).lower()
         cmd += ["-T", f"{key}={value}"]
@@ -144,6 +201,49 @@ def build_command(
         cmd += ["-M", f"{key}={value}"]
 
     return cmd
+
+
+# Petri/Bloom run every matching seed (170+ for the full audit), so they keep a small
+# default cap. Standard inspect-evals benchmarks run the full dataset unless capped.
+_PETRI_BLOOM_DEFAULT_LIMIT = 5
+
+
+def _positive_int(value: Any, name: str) -> int:
+    """Coerce a sample-limit value to an int >= 1, naming the parameter on failure."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a positive integer (got {value!r})") from None
+    if n < 1:
+        raise ValueError(f"{name} must be a positive integer (got {value!r})")
+    return n
+
+
+def _sample_limit(config: JobSpec, mode: str) -> int | None:
+    """Resolve the Inspect ``--limit`` (number of samples), or None for no cap.
+
+    Precedence:
+      1. JobSpec.num_examples (lifted from benchmarks[].parameters.num_examples by
+         eval-hub; the convention shared by all contrib adapters).
+      2. parameters.max_samples — deprecated alias. It was the sample cap before
+         num_examples was introduced and eval-hub does not strip it, so existing
+         collections still carry it. Note Inspect's own ``--max-samples`` means
+         *parallel* samples, not a sample cap, which is why it is being retired.
+      3. Petri/Bloom default; otherwise unbounded.
+    """
+    if config.num_examples is not None:
+        return _positive_int(config.num_examples, "num_examples")
+
+    legacy = config.parameters.get("max_samples")
+    if legacy is not None:
+        logger.warning(
+            "parameters.max_samples is deprecated; use num_examples "
+            "(treating max_samples=%s as num_examples)",
+            legacy,
+        )
+        return _positive_int(legacy, "parameters.max_samples")
+
+    return _PETRI_BLOOM_DEFAULT_LIMIT if mode in ("petri", "bloom") else None
 
 
 # Open-Telco (and similar) first-class -T parameters — keep flat under parameters, not task_args.
@@ -231,6 +331,7 @@ def _petri_task_flags(
 
 
 def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
+    refresh_hf_hub_auth(env)
     try:
         if env.get("EVALHUB_MODE", "") == "k8s":
             # allows long running benchmarks in k8s to run indefinitely
