@@ -1,0 +1,21 @@
+# Downstream-only pin adaptations for the RHOAI curated Python index.
+#
+# This file is consumed by uv's --overrides flag when compiling the hermetic
+# lockfile (see requirements-rhoai.txt header for the exact command). Each
+# line below exists because the curated index does not carry the upstream
+# pin; overrides win over the pins in requirements.txt for the compile.
+#
+# When a version becomes available on the curated index for the target
+# release, delete the matching line and regenerate requirements-rhoai.txt.
+
+# requests 2.33.1 not on the curated index (2.33.0 is); upstream pins ==2.33.1
+requests==2.33.0
+
+# Every inspect-ai on the curated index (>=0.3.257, lighteval transitive dep)
+# requires pydantic>=2.13.0; upstream's ==2.12.5 cannot resolve there
+pydantic>=2.13.0,<3
+
+# eval-hub-sdk 1.0.5 not on the curated index (1.0.4 is); upstream floor
+# ~=1.0.4 would allow it, but pin the exact curated version for
+# reproducibility
+eval-hub-sdk[adapter]==1.0.4

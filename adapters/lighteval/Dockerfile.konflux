@@ -1,15 +1,31 @@
-# LightEval adapter container for eval-hub
-FROM registry.redhat.io/ubi9/python-312:latest@sha256:99daebea02c2ed4b4170bb43e393b01b20df21439bd74b4526f629df8f0751e6
+# LightEval adapter container for eval-hub (downstream Konflux build)
+#
+# AIPCC base: ships Python 3.12 at /opt/app-root and openmpi, which the
+# curated RHEL torch wheels link against (libmpi_cxx.so.40). Plain
+# ubi9/python-312 installs the same wheel set but cannot import torch.
+# The digest pin below is what Renovate keeps updated.
+ARG BASE_IMAGE=quay.io/aipcc/base-images/cpu-el9.8:3.6.0-ea.2@sha256:5dbe6a3e14877ef9fbda55e6cef66430a244c6a5c73a9a72bfef5b3af31e44c5
+FROM ${BASE_IMAGE}
+ARG BASE_IMAGE
 
-# Switch to root to set up directories
+# The base runs as uid 1001 (default); root is only needed for chowns.
 USER 0
 
 # Set working directory
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy the lockfile and install Python dependencies.
+# requirements-rhoai.txt is uv-compiled from requirements.txt plus
+# requirements-overrides.txt against the RHOAI curated index (its
+# --index-url is embedded in the file); under hermetic Konflux builds,
+# Hermeto's prefetched wheels are used instead via --no-index.
+COPY requirements-rhoai.txt .
+RUN pip install --no-cache-dir -r requirements-rhoai.txt
+
+# uv is build tooling inherited from the base image, not a runtime dependency.
+RUN /opt/app-root/bin/python -m pip uninstall -y uv && \
+    test ! -e /opt/app-root/bin/uv && \
+    test ! -e /opt/app-root/bin/uvx
 
 # Copy adapter implementation
 COPY main.py .
@@ -34,3 +50,14 @@ USER 1001
 
 # Run the adapter
 ENTRYPOINT ["python", "main.py"]
+
+LABEL com.redhat.component="odh-eval-hub-lighteval-rhel9" \
+      name="rhoai/odh-eval-hub-lighteval-rhel9" \
+      description="LightEval framework adapter for eval-hub" \
+      summary="odh-eval-hub-lighteval" \
+      maintainer="['managed-open-data-hub@redhat.com']" \
+      io.openshift.expose-services="" \
+      io.k8s.display-name="odh-eval-hub-lighteval" \
+      io.k8s.description="LightEval framework adapter for eval-hub" \
+      com.redhat.license_terms="https://www.redhat.com/licenses/Red_Hat_Standard_EULA_20191108.pdf" \
+      com.redhat.aiplatform.image="${BASE_IMAGE}"
