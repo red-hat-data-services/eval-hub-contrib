@@ -1,0 +1,13 @@
+# Build dependencies for offline (hermetic) pip installs.
+# The two source-archive dependencies (evals, instruction-following-eval) are
+# built by pip inside the network-isolated buildah step; pip's build isolation
+# needs their declared build requirements available offline. Hermeto prefetches
+# this file alongside the main requirements file (requirements_build_files in
+# the prefetch-input JSON). The evals pyproject declares setuptools>=64,
+# setuptools-scm>=8, wheel; instruction-following-eval declares setuptools>=61,
+# wheel. vcs-versioning is setuptools-scm 10's own runtime dependency (it is
+# on the curated index); packaging is already in the main requirements file.
+setuptools==84.0.0
+setuptools-scm==10.3.4
+vcs-versioning==2.6.0
+wheel==0.48.0

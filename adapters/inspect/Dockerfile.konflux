@@ -1,4 +1,9 @@
-# Inspect AI adapter container for eval-hub
+# Inspect AI adapter container for eval-hub (downstream Konflux build)
+#
+# Base: stays on ubi9/python-312 — the inspect closure is torch-free, so the
+# AIPCC base (required by lighteval for the curated RHEL torch wheels'
+# openmpi) is not needed here. The digest pin below is what Renovate keeps
+# updated.
 FROM registry.redhat.io/ubi9/python-312:latest@sha256:99daebea02c2ed4b4170bb43e393b01b20df21439bd74b4526f629df8f0751e6
 
 USER 0
@@ -6,8 +11,14 @@ USER 0
 WORKDIR /app
 
 # ── Python dependencies ───────────────────────────────────────────────────────
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# requirements-rhoai.txt is uv-compiled from requirements.txt against the RHOAI
+# curated index (its --index-url is embedded in the file); the six packages no
+# curated index carries (inspect-evals, inspect-petri, petri-bloom,
+# inspect-scout, inspect-swe, ruamel-yaml) are pinned as direct wheel URLs
+# with --hash. Under hermetic Konflux builds, Hermeto's prefetched wheels are
+# used instead via --no-index (see the file header).
+COPY requirements-rhoai.txt .
+RUN pip install --no-cache-dir -r requirements-rhoai.txt
 
 # ── NLTK data — bundled at build time ────────────────────────────────────────
 #
@@ -18,13 +29,23 @@ RUN pip install --no-cache-dir -r requirements.txt
 #
 # Setting XDG_CACHE_HOME=/app/.cache makes the resolved path
 #   /app/.cache/inspect_evals/make_me_say/nltk_data
-# a fixed location inside the image layer. The RUN step below downloads all
-# three packages there at build time, so ensure_nltk_resource() finds the
-# data immediately and makes zero network calls at runtime.
+# a fixed location inside the image layer. When the data is present at build
+# time, the RUN step below installs all three packages there, so
+# ensure_nltk_resource() finds them immediately and makes zero network calls
+# at runtime.
 #
-# Airgapped deployments (no internet access during build):
+# LICENSING: nltk-data-airgap/ is intentionally NOT populated in this repo.
+# The Punkt models (punkt, punkt_tab) carry no license at all — NLTK's own
+# dataset licence overview (nltk_data DATASET-LICENSES.md) lists both as
+# "no license attribute" — so they cannot be redistributed here or baked into
+# the image. (WordNet 3.0's Princeton licence does permit redistribution, but
+# makemesay needs all three datasets, so none are shipped.) The staging
+# directory and the copy/extract logic below are kept so that a build whose
+# licensing has been cleared can populate the directory and get bundling back
+# with no other change:
 #
-# 1. On a connected host, pre-download the NLTK data into the build context:
+# 1. On a connected host with redistribution rights, pre-download the NLTK
+#    data into the build context:
 #
 #      python3 -c "
 #        import nltk, pathlib
@@ -33,13 +54,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 #            nltk.download(pkg, download_dir=str(dest))
 #      "
 #
-# 2. Build this Containerfile with the --build-arg NLTK_AIRGAP=true flag.
-#    When NLTK_AIRGAP=true the RUN step below skips the network download and
-#    instead copies the data from the nltk-data-airgap/ directory in the build
-#    context (the COPY and RUN instructions always execute; the branch is
-#    selected inside the Python script via the NLTK_AIRGAP environment variable):
-#
-#      podman build --build-arg NLTK_AIRGAP=true -t community-inspect .
+# 2. Build with the --build-arg NLTK_AIRGAP=true flag. When NLTK_AIRGAP=true
+#    the RUN step below skips the network download and instead copies the
+#    data from nltk-data-airgap/ in the build context. If that directory
+#    holds no data (the default in this repo), the step skips NLTK bundling
+#    entirely with a warning and the build succeeds — makemesay then needs
+#    network egress at first use, or the data volume-mounted at the path
+#    above.
 #
 # The base image (registry.access.redhat.com/ubi9/python-312) must be
 # available from your internal registry; mirror it if needed.
@@ -49,7 +70,9 @@ ENV XDG_CACHE_HOME=/app/.cache
 # INSPECT_EVALS_CACHE_DIR overrides at runtime. The value here must match the
 # NLTK_DIR computed inside the RUN step below.
 ENV INSPECT_EVALS_CACHE_DIR=/app/.cache/inspect_evals
-# NLTK_AIRGAP=true  → skip network download; COPY nltk-data-airgap/ from build context instead.
+# NLTK_AIRGAP=true  → never touch the network: copy nltk-data-airgap/ from the
+#                     build context if it holds data, otherwise skip NLTK
+#                     bundling with a warning (licensing: see above).
 # NLTK_AIRGAP=false → download punkt, punkt_tab, wordnet from the internet (default).
 ARG NLTK_AIRGAP=false
 
@@ -90,16 +113,16 @@ if airgap:
     # Exclude .gitkeep placeholder — only real NLTK data packages count.
     real_items = [p for p in src.iterdir() if p.name != '.gitkeep']
     if not real_items:
-        print('FATAL: NLTK_AIRGAP=true but nltk-data-airgap/ is empty.\n'
-              'Pre-download NLTK data on a connected host:\n'
-              '  python3 -c "\n'
-              '    import nltk, pathlib\n'
-              '    dest = pathlib.Path(\'nltk-data-airgap\')\n'
-              '    for pkg in (\'punkt\', \'punkt_tab\', \'wordnet\'):\n'
-              '        nltk.download(pkg, download_dir=str(dest))\n'
-              '  "',
-              file=sys.stderr)
-        sys.exit(1)
+        # No data staged (the default in this repo — the Punkt models carry
+        # no redistribution license; see the comment block above). Skip NLTK
+        # bundling: the build succeeds, and makemesay's ensure_nltk_resource()
+        # will attempt an on-demand download at first use (requires network
+        # egress) or fail in disconnected deployments.
+        print('WARNING: NLTK_AIRGAP=true but nltk-data-airgap/ holds no data.\n'
+              'Skipping NLTK bundling; makemesay will need network access at\n'
+              'first use, or the data mounted at '
+              f'{NLTK_DIR}.', file=sys.stderr)
+        sys.exit(0)
     # Copy pre-downloaded data from the build context staging area.
     for item in real_items:
         dest = NLTK_DIR / item.name
@@ -115,15 +138,18 @@ else:
             sys.exit(1)
         print(f'Downloaded {pkg:12s}')
 
-# NLTK 3.9+ stores corpora as .zip files without auto-extracting.
-# ensure_nltk_resource() in makemesay/game.py calls
-#   nltk.data.find("corpora/wordnet", paths=[...])
-# which matches the directory form, not the zip — so we extract it explicitly.
-# punkt and punkt_tab are already in directory form after download.
+# NLTK 3.9+ stores downloaded packages as .zip files without auto-extracting
+# (true in airgap mode especially: nltk.download() on the staging host leaves
+# punkt.zip / punkt_tab.zip / wordnet.zip in place). ensure_nltk_resource()
+# in makemesay/game.py calls
+#   nltk.data.find("tokenizers/punkt", paths=[...])
+# which matches the directory form, not the zip — so every zip is extracted
+# explicitly. Each archive has its package directory at the root, so
+# extracting into the parent yields tokenizers/punkt/ etc. directly.
 import zipfile
-for subdir in ('corpora',):
+for subdir in ('corpora', 'tokenizers'):
     for zp in (NLTK_DIR / subdir).glob('*.zip'):
-        target = zp.with_suffix('')   # corpora/wordnet.zip -> corpora/wordnet
+        target = zp.with_suffix('')   # tokenizers/punkt.zip -> tokenizers/punkt
         if not target.exists():
             print(f'Extracting {zp.name} -> {target.name}/')
             with zipfile.ZipFile(zp) as zf:
@@ -162,3 +188,13 @@ ENV INSPECT_NO_TELEMETRY=1
 USER 1001
 
 ENTRYPOINT ["python", "main.py"]
+
+LABEL com.redhat.component="odh-eval-hub-inspectai-rhel9" \
+      name="rhoai/odh-eval-hub-inspectai-rhel9" \
+      description="Inspect AI framework adapter for eval-hub" \
+      summary="odh-eval-hub-inspectai" \
+      maintainer="['managed-open-data-hub@redhat.com']" \
+      io.openshift.expose-services="" \
+      io.k8s.display-name="odh-eval-hub-inspectai" \
+      io.k8s.description="Inspect AI framework adapter for eval-hub" \
+      com.redhat.license_terms="https://www.redhat.com/licenses/Red_Hat_Standard_EULA_20191108.pdf"
