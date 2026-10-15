@@ -4,7 +4,7 @@
 # AIPCC base (required by lighteval for the curated RHEL torch wheels'
 # openmpi) is not needed here. The digest pin below is what Renovate keeps
 # updated.
-FROM registry.redhat.io/ubi9/python-312:latest@sha256:40578f841b3f410f78821e09c803a8b44a638cf8bfcfe2db1fb6d7a53c47dd5f
+FROM registry.redhat.io/ubi9/python-312:latest@sha256:f793a102147ffa00b45ccb88ae91d726c17ac2f7e70214eef0cbfdc32816ec01
 
 USER 0
 
