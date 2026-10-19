@@ -1,22 +1,35 @@
 """Command building, environment setup, and subprocess execution."""
 
+import json
 import logging
 import os
 import re
+import signal
 import subprocess
+import threading
+from collections import deque
 from pathlib import Path
 from typing import Any
 
 from evalhub.adapter import JobSpec
-from evalhub.adapter.auth import resolve_model_credentials
+from evalhub.adapter.auth import read_model_auth_key, resolve_model_credentials
 
-from _benchmarks import PETRI_SEED_MAP
+from _benchmarks import PETRI_SEED_MAP, _CLIENT_OPENAI_COMPAT
 from _hf_auth import apply_hf_hub_auth, refresh_hf_hub_auth
 from _hf_offline import (
     TEST_DATA_DIR,
     configure_hf_offline_environment,
     ensure_test_data_ready_for_offline,
     should_use_hf_offline,
+)
+from _preflight import (
+    HOSTS_ENV,
+    MODE_ENV,
+    TIMEOUT_ENV,
+    normalize_hosts,
+    normalize_mode,
+    normalize_timeout,
+    run_preflight,
 )
 from _routing import (
     _is_ollama_endpoint,
@@ -30,6 +43,53 @@ from _routing import (
 logger = logging.getLogger(__name__)
 
 _API_KEY_RE = re.compile(r'"api_key"\s*:\s*"[^"]*"')
+
+# Runtime knobs. Each can be set as a job parameter (wins) or as an environment variable,
+# for example through the provider's runtime.k8s.env. See "Diagnosing stalled jobs" in README.md.
+_JOB_TIMEOUT_ENV = "INSPECT_TIMEOUT_S"      # parameters.timeout_s
+_STREAM_LOGS_ENV = "INSPECT_STREAM_LOGS"    # parameters.stream_logs
+_DEFAULT_LOCAL_TIMEOUT_S = 7200.0
+_OUTPUT_TAIL_LINES = 200
+_KILL_GRACE_S = 10.0
+_COLLECTION_JUDGE_BENCHMARKS = frozenset({"inspect/hle", "inspect/cyberseceval-2-pi"})
+
+
+def _collection_judge_enabled(config: JobSpec) -> bool:
+    """Validate the opt-in flat judge inputs without changing legacy jobs."""
+    parameters = config.parameters
+    if config.benchmark_id not in _COLLECTION_JUDGE_BENCHMARKS:
+        return False
+    if "judge_model" not in parameters:
+        return False
+    # Existing standalone HLE jobs may carry a provider-level judge_model
+    # alongside an explicit grader role; keep that role authoritative.
+    model_roles = parameters.get("model_roles")
+    if isinstance(model_roles, dict) and "grader" in model_roles:
+        return False
+    name = parameters.get("judge_model")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("parameters.judge_model must be a non-empty model name")
+    conflicting_keys = (
+        "judge_url", "judge_api_key", "judge_base_url",
+        "judge_anthropic_base_url", "judge_anthropic_api_key",
+        "grader_model", "grader_base_url",
+    )
+    for key in conflicting_keys:
+        if parameters.get(key):
+            raise ValueError(f"judge_model cannot be combined with parameters.{key}")
+    return True
+
+
+def _collection_grader_spec(config: JobSpec, env: dict[str, str]) -> str:
+    """Bind Inspect's grader role without putting credentials in CLI arguments."""
+    name = config.parameters["judge_model"].strip()
+    if read_model_auth_key("judge_api-key"):
+        return grader_model_spec(name)
+    client = select_client(env, endpoint_url=config.model.url)
+    model = route_model(name, client)
+    if client == _CLIENT_OPENAI_COMPAT:
+        return json.dumps({"model": model, "model_args": {"responses_api": False}})
+    return model
 
 
 def redact_cmd(cmd: list[str]) -> str:
@@ -53,6 +113,7 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
     """
     env = os.environ.copy()
     p = config.parameters
+    collection_judge_enabled = _collection_judge_enabled(config)
 
     if config.model.url:
         if _is_ollama_endpoint(config.model.url):
@@ -91,6 +152,20 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
             or "https://api.openai.com/v1"
         )
 
+    if collection_judge_enabled:
+        # The adapter receives only synthetic reference values in Kubernetes;
+        # the sidecar resolves the real credential and optional upstream URL.
+        judge_key = read_model_auth_key("judge_api-key")
+        projected_url = read_model_auth_key("judge_url")
+        if projected_url and not judge_key:
+            raise ValueError("judge_url in model.auth.secret_ref requires judge_api-key")
+        if judge_key:
+            judge_url = projected_url or config.model.url
+            if not judge_url:
+                raise ValueError("judge_api-key requires judge_url or config.model.url")
+            env["OPENAI_JUDGE_API_KEY"] = judge_key
+            env["OPENAI_JUDGE_BASE_URL"] = judge_url
+
     # ANTHROPIC_BASE_URL passes through from host env.
 
     if mode not in ("petri", "bloom"):
@@ -110,7 +185,48 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
         apply_hf_hub_auth(env)
 
     env["INSPECT_NO_TELEMETRY"] = "1"
+    _apply_runtime_overrides(p, env)
     return env
+
+
+def _apply_runtime_overrides(parameters: dict[str, Any], env: dict[str, str]) -> None:
+    """Copy job-level diagnosability knobs into the subprocess env (parameter wins).
+
+    Values are validated here so a bad parameter fails the job at start with a message
+    naming it, rather than surfacing later from inside the run.
+    """
+    if parameters.get("preflight") is not None:
+        env[MODE_ENV] = normalize_mode(parameters["preflight"], "preflight")
+    if parameters.get("preflight_timeout_s") is not None:
+        env[TIMEOUT_ENV] = str(normalize_timeout(parameters["preflight_timeout_s"], "preflight_timeout_s"))
+    if parameters.get("preflight_hosts") is not None:
+        env[HOSTS_ENV] = ",".join(normalize_hosts(parameters["preflight_hosts"], "preflight_hosts"))
+    if parameters.get("timeout_s") is not None:
+        env[_JOB_TIMEOUT_ENV] = str(parameters["timeout_s"])
+        _resolve_job_timeout(env)  # validate
+    if parameters.get("stream_logs") is not None:
+        env[_STREAM_LOGS_ENV] = "1" if parameters["stream_logs"] else "0"
+
+
+def _resolve_job_timeout(env: dict[str, str]) -> float | None:
+    """Wall-clock limit for ``inspect eval`` in seconds, or None for no limit.
+
+    ``INSPECT_TIMEOUT_S`` (``parameters.timeout_s``) overrides the default: ``0`` or
+    ``none`` disables the limit. Without an override, k8s jobs are unbounded (long full-dataset
+    runs are normal there) and other modes keep the 2 hour limit.
+    """
+    raw = (env.get(_JOB_TIMEOUT_ENV) or "").strip().lower()
+    if not raw:
+        return None if env.get("EVALHUB_MODE", "") == "k8s" else _DEFAULT_LOCAL_TIMEOUT_S
+    if raw in ("0", "none", "false", "off"):
+        return None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        raise ValueError(f"timeout_s must be a positive number of seconds, or 0 for none (got {raw!r})") from None
+    if seconds < 0:
+        raise ValueError(f"timeout_s must be a positive number of seconds, or 0 for none (got {raw!r})")
+    return seconds or None
 
 
 def build_command(
@@ -153,6 +269,9 @@ def build_command(
                 f"parameters.model_roles must be a dict (got {type(model_roles).__name__}). "
                 "Example: model_roles: {grader: openai/gpt-4o-mini}"
             )
+        if _collection_judge_enabled(config):
+            model_roles = dict(model_roles)
+            model_roles["grader"] = _collection_grader_spec(config, env)
         for role, spec in model_roles.items():
             cmd += ["--model-role", f"{role}={spec}"]
 
@@ -187,6 +306,11 @@ def build_command(
     cmd += ["--log-level", config.parameters.get("log_level", "info")]
 
     task_args = _task_args(config)
+    if config.benchmark_id == "inspect/cyberseceval-2-pi" and _collection_judge_enabled(config):
+        if task_args.get("judge_llm") not in (None, "null"):
+            raise ValueError("judge_model cannot be combined with task_args.judge_llm")
+        # The task's built-in judge_llm would otherwise bypass the grader role.
+        task_args["judge_llm"] = "null"
     if config.benchmark_id == "inspect/strong-reject" and config.parameters.get("grader_model"):
         # Ignore a legacy explicit judge_llm (often set to the target model) so
         # StrongREJECT uses the separately configured grader role.
@@ -300,6 +424,7 @@ def _petri_model_role_flags(config: JobSpec, env: dict[str, str]) -> list[str]:
 def _petri_task_flags(
     config: JobSpec, mode: str, behavior_dir: Path | None
 ) -> list[str]:
+    """Build -T CLI flags for petri (seed, turns, rollback, realism, tools, judge) and bloom (behavior, turns) modes."""
     flags: list[str] = []
 
     if mode == "petri":
@@ -331,37 +456,96 @@ def _petri_task_flags(
 
 
 def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
+    """Run ``inspect eval``, streaming its output to the adapter log as it arrives.
+
+    Output used to be captured and shown only on failure, so a job waiting on a dataset
+    download or an unresponsive model endpoint looked frozen. Now every line is logged
+    live (prefixed ``inspect |``), a network pre-flight fails fast when a required host is
+    unreachable, and the run is bounded by ``timeout_s`` when one is configured.
+    """
     refresh_hf_hub_auth(env)
+    run_preflight(cmd[2] if len(cmd) > 2 else "", env)
+    timeout = _resolve_job_timeout(env)
+    stream = (env.get(_STREAM_LOGS_ENV) or "1").strip().lower() not in ("0", "false", "no", "off")
+
+    tail: deque[str] = deque(maxlen=_OUTPUT_TAIL_LINES)
+    timed_out = threading.Event()
     try:
-        if env.get("EVALHUB_MODE", "") == "k8s":
-            # allows long running benchmarks in k8s to run indefinitely
-            timeout = None
-        else:
-            timeout = 7200
-        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        raise RuntimeError(f"inspect eval timed out after {timeout}.") from e
-    except (subprocess.SubprocessError, OSError):
+        proc = subprocess.Popen(
+            cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, errors="replace",
+            # Own process group, so a timeout also stops children such as `git clone`
+            # that would otherwise keep the output pipe open.
+            start_new_session=True,
+        )
+    except OSError:
         logger.exception("Subprocess failed")
         raise
 
-    if result.returncode != 0:
-        logger.error(f"inspect eval stdout:\n{result.stdout[-3000:]}")
-        logger.error(f"inspect eval stderr:\n{result.stderr[-3000:]}")
-        raise RuntimeError(
-            f"inspect eval failed (exit {result.returncode}).\n"
-            f"stderr: {result.stderr[-2000:]}"
-        )
+    def _signal_group(sig: int) -> None:
+        """Send sig to the process group, silently ignoring lookup and permission errors."""
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
 
-    if result.stdout:
-        logger.debug(f"stdout (tail): {result.stdout[-2000:]}")
-    if result.stderr:
-        logger.debug(f"stderr (tail): {result.stderr[-2000:]}")
+    def _kill() -> None:
+        """Watchdog callback: SIGTERM the group, wait for the grace period, then unconditionally SIGKILL."""
+        timed_out.set()
+        _signal_group(signal.SIGTERM)
+        try:
+            proc.wait(timeout=_KILL_GRACE_S)
+        except subprocess.TimeoutExpired:
+            pass
+        # Always SIGKILL the group after the grace period. The direct child may
+        # have exited on SIGTERM while a TERM-resistant descendant in the same
+        # process group still holds the stdout pipe open, blocking the read loop.
+        _signal_group(signal.SIGKILL)
+
+    watchdog = threading.Timer(timeout, _kill) if timeout else None
+    if watchdog:
+        watchdog.daemon = True
+        watchdog.start()
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            tail.append(line)
+            if stream:
+                logger.info("inspect | %s", line)
+        returncode = proc.wait()
+    except BaseException:
+        _signal_group(signal.SIGKILL)
+        try:
+            proc.wait(timeout=_KILL_GRACE_S)  # reap, so no zombie is left behind
+        except subprocess.TimeoutExpired:
+            pass
+        if proc.stdout:
+            proc.stdout.close()
+        raise
+    finally:
+        if watchdog:
+            watchdog.cancel()
+
+    output_tail = "\n".join(tail)
+    if timed_out.is_set():
+        logger.error("inspect eval output (tail):\n%s", output_tail[-3000:])
+        raise RuntimeError(f"inspect eval timed out after {timeout:g}s (timeout_s / {_JOB_TIMEOUT_ENV}).")
+
+    if returncode != 0:
+        if not stream:
+            logger.error("inspect eval output (tail):\n%s", output_tail[-3000:])
+        raise RuntimeError(
+            f"inspect eval failed (exit {returncode}).\n"
+            f"output (tail): {output_tail[-2000:]}"
+        )
 
     log_files = sorted(log_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)
     if not log_files:
         raise RuntimeError(
-            f"inspect eval produced no JSON log in {log_dir}. stdout: {result.stdout[-500:]}"
+            f"inspect eval produced no JSON log in {log_dir}. output (tail): {output_tail[-500:]}"
         )
 
     log_file = log_files[-1]
@@ -370,6 +554,7 @@ def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
 
 
 def get_inspect_version() -> str:
+    """Return the installed inspect-ai version string, or 'unknown' if the binary is unavailable."""
     try:
         result = subprocess.run(["inspect", "--version"], capture_output=True, text=True, timeout=10)
         raw = result.stdout.strip() or result.stderr.strip()
