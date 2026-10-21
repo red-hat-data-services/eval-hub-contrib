@@ -40,6 +40,7 @@ antlr4-python3-runtime==4.13.2
     # via latex2sympy2-extended
 anyio==4.15.1
     # via
+    #   eval-hub-sdk
     #   httpx
     #   inspect-ai
     #   openai
@@ -102,10 +103,8 @@ distro==1.9.0
     # via openai
 docstring-parser==0.18.0
     # via inspect-ai
-eval-hub-sdk==1.0.4
-    # via
-    #   --override requirements-overrides.txt
-    #   -r requirements.txt
+eval-hub-sdk==1.0.6
+    # via -r requirements.txt
 fastapi==0.141.1
     # via inspect-ai
 fastuuid==0.14.0
@@ -149,6 +148,7 @@ httpcore==1.0.9
 httpx==0.28.1
     # via
     #   datasets
+    #   eval-hub-sdk
     #   huggingface-hub
     #   inspect-ai
     #   lighteval
@@ -156,6 +156,7 @@ httpx==0.28.1
     #   openai
 huggingface-hub==1.32.0
     # via
+    #   -r requirements.txt
     #   accelerate
     #   datasets
     #   lighteval
@@ -527,6 +528,7 @@ universal-pathlib==0.3.10
 urllib3==2.8.0
     # via
     #   botocore
+    #   eval-hub-sdk
     #   requests
 uvicorn==0.53.0
     # via inspect-ai
