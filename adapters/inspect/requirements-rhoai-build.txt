@@ -7,6 +7,12 @@
 # setuptools-scm>=8, wheel; instruction-following-eval declares setuptools>=61,
 # wheel. vcs-versioning is setuptools-scm 10's own runtime dependency (it is
 # on the curated index); packaging is already in the main requirements file.
+# Hermeto resolves this file independently of the main lockfile, so it must
+# carry its own --index-url: without one the build deps are prefetched from
+# public pypi.org, which builds fine but fails the release policy's
+# binary-wheel source check (SBOM purls without a curated-index qualifier).
+--index-url https://console.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9-test/simple/
+
 setuptools==84.0.0
 setuptools-scm==10.3.4
 vcs-versioning==2.6.0

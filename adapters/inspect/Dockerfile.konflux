@@ -1,10 +1,15 @@
 # Inspect AI adapter container for eval-hub (downstream Konflux build)
 #
-# Base: stays on ubi9/python-312 — the inspect closure is torch-free, so the
-# AIPCC base (required by lighteval for the curated RHEL torch wheels'
-# openmpi) is not needed here. The digest pin below is what Renovate keeps
-# updated.
-FROM registry.redhat.io/ubi9/python-312:latest@sha256:f43a57e9a6a2243e333008219002b9f2b1661868a94199f5dec4d602e1501482
+# AIPCC base: ships the RHEL runtime libraries the curated-index wheels
+# link against — openblas (libopenblasp.so.0) for the numpy/scipy C
+# extensions, thrift (libthrift-0.24.0.so) for pyarrow's bundled
+# libparquet, plus the rest of that wheel set's system-library closure
+# (libre2, libsnappy, liblz4, libutf8proc, lcms2, openjpeg, libgfortran,
+# ...). Plain ubi9/python-312 does not carry these libraries. The digest
+# pin below is what Renovate keeps updated.
+ARG BASE_IMAGE=quay.io/aipcc/base-images/cpu-el9.8:3.6.0@sha256:2a255b178a6b40d9e73ebb5ad199c22c3302bee6980ded45732031e215c7cbe7
+FROM ${BASE_IMAGE}
+ARG BASE_IMAGE
 
 USER 0
 
@@ -12,13 +17,18 @@ WORKDIR /app
 
 # ── Python dependencies ───────────────────────────────────────────────────────
 # requirements-rhoai.txt is uv-compiled from requirements.txt against the RHOAI
-# curated index (its --index-url is embedded in the file); the six packages no
-# curated index carries (inspect-evals, inspect-petri, petri-bloom,
-# inspect-scout, inspect-swe, ruamel-yaml) are pinned as direct wheel URLs
-# with --hash. Under hermetic Konflux builds, Hermeto's prefetched wheels are
-# used instead via --no-index (see the file header).
+# curated index (its --index-url is embedded in the file); the packages the
+# curated index does not carry at the pinned versions (inspect-evals,
+# petri-bloom) and the two git deps are pinned as direct
+# wheel / archive URLs with --hash. Under hermetic Konflux builds, Hermeto's
+# prefetched wheels are used instead via --no-index (see the file header).
 COPY requirements-rhoai.txt .
 RUN pip install --no-cache-dir -r requirements-rhoai.txt
+
+# uv is build tooling inherited from the base image, not a runtime dependency.
+RUN /opt/app-root/bin/python -m pip uninstall -y uv && \
+    test ! -e /opt/app-root/bin/uv && \
+    test ! -e /opt/app-root/bin/uvx
 
 # ── NLTK data — bundled at build time ────────────────────────────────────────
 #
@@ -62,8 +72,8 @@ RUN pip install --no-cache-dir -r requirements-rhoai.txt
 #    network egress at first use, or the data volume-mounted at the path
 #    above.
 #
-# The base image (registry.access.redhat.com/ubi9/python-312) must be
-# available from your internal registry; mirror it if needed.
+# The base image must be available from your internal registry; mirror it
+# if needed.
 ENV XDG_CACHE_HOME=/app/.cache
 # Pin the inspect_evals cache root explicitly so the NLTK data path is
 # predictable regardless of the XDG_CACHE_HOME default and immune to
@@ -197,4 +207,5 @@ LABEL com.redhat.component="odh-eval-hub-inspectai-rhel9" \
       io.openshift.expose-services="" \
       io.k8s.display-name="odh-eval-hub-inspectai" \
       io.k8s.description="Inspect AI framework adapter for eval-hub" \
-      com.redhat.license_terms="https://www.redhat.com/licenses/Red_Hat_Standard_EULA_20191108.pdf"
+      com.redhat.license_terms="https://www.redhat.com/licenses/Red_Hat_Standard_EULA_20191108.pdf" \
+      com.redhat.aiplatform.image="${BASE_IMAGE}"
