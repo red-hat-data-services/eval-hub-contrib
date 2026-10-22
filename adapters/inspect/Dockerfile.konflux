@@ -17,10 +17,10 @@ WORKDIR /app
 
 # ── Python dependencies ───────────────────────────────────────────────────────
 # requirements-rhoai.txt is uv-compiled from requirements.txt against the RHOAI
-# curated index (its --index-url is embedded in the file); the packages the
-# curated index does not carry at the pinned versions (inspect-evals,
-# petri-bloom) and the two git deps are pinned as direct
-# wheel / archive URLs with --hash. Under hermetic Konflux builds, Hermeto's
+# curated index (its --index-url is embedded in the file); every wheel in the
+# lock — inspect-evals, eval-hub-sdk and petri-bloom included — resolves from
+# that index, so the only direct URLs left are the two git deps, pinned as
+# hashable archive URLs. Under hermetic Konflux builds, Hermeto's
 # prefetched wheels are used instead via --no-index (see the file header).
 COPY requirements-rhoai.txt .
 RUN pip install --no-cache-dir -r requirements-rhoai.txt
