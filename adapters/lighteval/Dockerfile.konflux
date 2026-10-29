@@ -29,6 +29,10 @@ RUN /opt/app-root/bin/python -m pip uninstall -y uv && \
 
 # Copy adapter implementation
 COPY main.py .
+COPY lighteval_logprob_patch.py .
+COPY lighteval_memory_cap.py .
+COPY sample_results.py .
+COPY custom_tasks.py .
 
 # Create writable cache directories with proper permissions
 # Make site-packages writable for lighteval to cache task data
