@@ -1,8 +1,6 @@
 # RHOAI production lock for Python 3.12 / Linux.
 # Generated from requirements.txt and requirements-overrides.txt using uv pip compile,
 # with the previous lock's unrelated pins retained as constraints.
-# Targets: litellm[caching]==1.102.2, s3fs==2026.6.0, fsspec==2026.6.0.
-# SDK remains 1.0.6 pending production promotion; NLTK override remains 3.10.4.
 --index-url https://console.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
 
 absl-py==2.5.0
@@ -104,7 +102,7 @@ distro==1.9.0
     # via openai
 docstring-parser==0.18.0
     # via inspect-ai
-eval-hub-sdk==1.0.6
+eval-hub-sdk==1.0.7
     # via -r requirements.txt
 fastapi==0.141.1
     # via inspect-ai
