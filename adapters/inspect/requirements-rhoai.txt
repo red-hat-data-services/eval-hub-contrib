@@ -225,9 +225,6 @@ eval-hub-sdk==1.0.7 \
     --hash=sha256:ffafdbeaf1c3eb4418e50a2467525f816bac46860b90c804347879bef86ad7a6
     # via -r requirements.txt
     # from https://console.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
-evals @ https://github.com/gsma-labs/evals/archive/708f1c5498793536824eae9919ae003f13c910ea.tar.gz \
-    --hash=sha256:644ec6f7eb32706a591d972321461e0e761b1e5b4f65120738383060d3c0ca5c
-    # via -r requirements.txt — git dep pinned to full commit sha, consumed as a hashable GitHub archive URL
 fastapi==0.143.0 \
     --hash=sha256:64030fe4b6d6e9db06fce1bd9866861f42933ee7684a517b85a3fc210ed17970
     # via
