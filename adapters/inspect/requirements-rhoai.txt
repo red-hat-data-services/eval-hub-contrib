@@ -131,8 +131,8 @@ botocore==1.43.117 \
     #   boto3
     #   s3transfer
     # from https://console.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
-certifi==2026.7.22 \
-    --hash=sha256:e5fe15bb588e1de8f8caef013fbcf10c5e61c7f2a96ecba518df6c4d9acbdd7b
+certifi==2026.10.23 \
+    --hash=sha256:80cb263324c8d8cb1f4b3242205e0aaba63a4f61b2023cec54983608f1a2f3bb
     # via
     #   httpcore
     #   httpx
