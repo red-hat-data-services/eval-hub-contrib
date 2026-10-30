@@ -131,8 +131,8 @@ botocore==1.43.117 \
     #   boto3
     #   s3transfer
     # from https://console.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
-certifi==2026.7.22 \
-    --hash=sha256:e5fe15bb588e1de8f8caef013fbcf10c5e61c7f2a96ecba518df6c4d9acbdd7b
+certifi==2026.10.23 \
+    --hash=sha256:80cb263324c8d8cb1f4b3242205e0aaba63a4f61b2023cec54983608f1a2f3bb
     # via
     #   httpcore
     #   httpx
@@ -650,6 +650,11 @@ pillow==12.3.0 \
     --hash=sha256:c945f479bc2de2c2329bd78e6ee8b730843f8148f1534f791e5990d7b3f1e308
     # via
     #   inspect-evals
+    # from https://console.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
+pip==26.2.2 \
+    --hash=sha256:709dab4e8d9056c683b7055079c06dc80a3b0012e716de7b99c64fd387c7fe34
+    # via
+    #   -r requirements.txt
     # from https://console.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9/simple/
 platformdirs==4.12.4 \
     --hash=sha256:8d6a24a9fbfab7fbd1800069f212f201ec53db9f5892b84222febd18b011b21b
