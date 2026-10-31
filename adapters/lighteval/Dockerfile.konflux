@@ -19,8 +19,10 @@ WORKDIR /app
 # requirements-overrides.txt against the RHOAI curated index (its
 # --index-url is embedded in the file); under hermetic Konflux builds,
 # Hermeto's prefetched wheels are used instead via --no-index.
+# Install the compiled lock without re-resolving dependencies so its NLTK
+# override is preserved despite lighteval 0.13.0 requiring nltk==3.9.1.
 COPY requirements-rhoai.txt .
-RUN pip install --no-cache-dir -r requirements-rhoai.txt
+RUN pip install --no-cache-dir --no-deps -r requirements-rhoai.txt
 
 # uv is build tooling inherited from the base image, not a runtime dependency.
 RUN /opt/app-root/bin/python -m pip uninstall -y uv && \
@@ -29,6 +31,10 @@ RUN /opt/app-root/bin/python -m pip uninstall -y uv && \
 
 # Copy adapter implementation
 COPY main.py .
+COPY lighteval_logprob_patch.py .
+COPY lighteval_memory_cap.py .
+COPY sample_results.py .
+COPY custom_tasks.py .
 
 # Create writable cache directories with proper permissions
 # Make site-packages writable for lighteval to cache task data

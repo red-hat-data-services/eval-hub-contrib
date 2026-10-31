@@ -7,7 +7,7 @@
 # (libre2, libsnappy, liblz4, libutf8proc, lcms2, openjpeg, libgfortran,
 # ...). Plain ubi9/python-312 does not carry these libraries. The digest
 # pin below is what Renovate keeps updated.
-ARG BASE_IMAGE=quay.io/aipcc/base-images/cpu-el9.8:3.6.0@sha256:2a255b178a6b40d9e73ebb5ad199c22c3302bee6980ded45732031e215c7cbe7
+ARG BASE_IMAGE=quay.io/aipcc/base-images/cpu-el9.8:3.6.0@sha256:539fa19ff1f9aed23d1253cbc239d46e3f24664ddfe4766869b8ae7e7f269aaa
 FROM ${BASE_IMAGE}
 ARG BASE_IMAGE
 

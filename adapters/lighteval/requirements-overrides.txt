@@ -1,16 +1,9 @@
-# Downstream-only pin adaptations for the RHOAI curated Python index.
+# Applied AFTER requirements.txt and deliberately outside it: lighteval pins
+# nltk exactly (==3.9.1 in 0.13.0, 42 advisories), so a normal resolve cannot raise it.
+# nltk 3.10.4 has no known advisories.
+# Checked: word_tokenize, TreebankWordTokenizer, edit_distance, sentence_bleu,
+# scores.f_measure and the punkt_tab download behave exactly as on 3.9.1.
 #
-# This file is consumed by uv's --overrides flag when compiling the hermetic
-# lockfile (see requirements-rhoai.txt header for the exact command). Each
-# line below exists because the curated index does not carry the upstream
-# pin; overrides win over the pins in requirements.txt for the compile.
-#
-# When a version becomes available on the curated index for the target
-# release, delete the matching line and regenerate requirements-rhoai.txt.
-
-# requests 2.33.1 not on the curated index (2.33.0 is); upstream pins ==2.33.1
-requests==2.33.0
-
-# Every inspect-ai on the curated index (>=0.3.257, lighteval transitive dep)
-# requires pydantic>=2.13.0; upstream's ==2.12.5 cannot resolve there
-pydantic>=2.13.0,<3
+#   uv pip install -r requirements.txt --override requirements-overrides.txt
+#   pip install --no-deps -r requirements-overrides.txt     # after requirements.txt
+nltk==3.10.4
