@@ -3,8 +3,9 @@
 # AIPCC base: ships Python 3.12 at /opt/app-root and openmpi, which the
 # curated RHEL torch wheels link against (libmpi_cxx.so.40). Plain
 # ubi9/python-312 installs the same wheel set but cannot import torch.
-# The digest pin below is what Renovate keeps updated.
-ARG BASE_IMAGE=quay.io/aipcc/base-images/cpu-el9.8:3.6.0-ea.2@sha256:501370c1183fc16239e7d157f3c907d8ee9f8683d6e07e422b22c79b9adab01e
+# Pinned to the CPU torch 2.13 flavour, which matches torch==2.13.0 in
+# requirements-rhoai.txt and the package index that file installs from.
+ARG BASE_IMAGE=quay.io/aipcc/base-images/cpu-torch2.13-el9.8:1793936818@sha256:5766a64e301d31a2b16ca0b9660de25df07ca0505079943ab2dc79098748603f
 FROM ${BASE_IMAGE}
 ARG BASE_IMAGE
 
@@ -19,8 +20,10 @@ WORKDIR /app
 # requirements-overrides.txt against the RHOAI curated index (its
 # --index-url is embedded in the file); under hermetic Konflux builds,
 # Hermeto's prefetched wheels are used instead via --no-index.
+# Install the compiled lock without re-resolving dependencies so its NLTK
+# override is preserved despite lighteval 0.13.0 requiring nltk==3.9.1.
 COPY requirements-rhoai.txt .
-RUN pip install --no-cache-dir -r requirements-rhoai.txt
+RUN pip install --no-cache-dir --no-deps -r requirements-rhoai.txt
 
 # uv is build tooling inherited from the base image, not a runtime dependency.
 RUN /opt/app-root/bin/python -m pip uninstall -y uv && \
@@ -29,6 +32,10 @@ RUN /opt/app-root/bin/python -m pip uninstall -y uv && \
 
 # Copy adapter implementation
 COPY main.py .
+COPY lighteval_logprob_patch.py .
+COPY lighteval_memory_cap.py .
+COPY sample_results.py .
+COPY custom_tasks.py .
 
 # Create writable cache directories with proper permissions
 # Make site-packages writable for lighteval to cache task data
