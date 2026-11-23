@@ -3,8 +3,7 @@
 # matching Dockerfile.konflux. Existing versions are retained, including the
 # inspect-evals[math,bfcl] and eval-hub-sdk[adapter] dependency closures.
 # Hashes were refreshed against this channel with uv pip compile.
-# The two pinned, hash-verified Git source archives are retained unchanged;
-# their AIPCC onboarding is tracked separately in RHOAIENG-102804.
+# The two pinned, hash-verified Git source archives are retained unchanged.
 # Hermeto supports exactly one index. Do not add a PyPI or -test fallback.
 --index-url https://packages.redhat.com/api/pypi/public-rhai/cpu-torch2.13-el9.8/simple/
 
