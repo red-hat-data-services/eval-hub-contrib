@@ -6,8 +6,9 @@
 # libparquet, plus the rest of that wheel set's system-library closure
 # (libre2, libsnappy, liblz4, libutf8proc, lcms2, openjpeg, libgfortran,
 # ...). Plain ubi9/python-312 does not carry these libraries. The digest
-# pin below is what Renovate keeps updated.
-ARG BASE_IMAGE=quay.io/aipcc/base-images/cpu-el9.8:3.6.0@sha256:c4811eab929773e3f5ee1cf55cc4896d885eb77dd11e6e114e6fd91dd24bd39b
+# pin below is what Renovate keeps updated. The cpu-torch2.13-el9.8
+# channel matches the production index in both requirements-rhoai files.
+ARG BASE_IMAGE=quay.io/aipcc/base-images/cpu-torch2.13-el9.8:1794626432@sha256:476fd5e296f058b2ebe029e530d065b2df079c06ac2e95c586bf6d6f86ce967b
 FROM ${BASE_IMAGE}
 ARG BASE_IMAGE
 
