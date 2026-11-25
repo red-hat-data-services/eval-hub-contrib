@@ -4,7 +4,11 @@
 # ubi9/python-* images already enable nodejs:22, and switching streams fails
 # with "It is not possible to switch enabled streams of a module".
 
-ARG BASE_IMAGE=registry.access.redhat.com/ubi9/ubi-minimal:latest
+# Community/local builds: 9.8 stream (no digest). Konflux uses
+# Dockerfile.konflux with the digest-pinned ubi-minimal-pqc:9.8 default.
+# Keep the build body in sync with Dockerfile.konflux aside from BASE_IMAGE
+# and the Konflux-only LABEL block.
+ARG BASE_IMAGE=registry.access.redhat.com/ubi9/ubi-minimal:9.8
 FROM ${BASE_IMAGE}
 
 # Keep in sync with main.py PROMPTFOO_VERSION.
