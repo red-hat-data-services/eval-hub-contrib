@@ -1,11 +1,16 @@
 # promptfoo adapter image — Konflux/RHOAI build (digest-pinned).
-# Keep in sync with Containerfile; FROM must use @sha256 digests for RHOAI onboarding.
 #
 # Uses ubi-minimal so we can enable the nodejs:24 AppStream module. The
 # ubi9/python-* images already enable nodejs:22, and switching streams fails
 # with "It is not possible to switch enabled streams of a module".
+#
+# Keep the build body in sync with Containerfile; the intentional deltas are
+# the digest-pinned BASE_IMAGE default (RHOAI 9.8 / PQC channel) and the
+# component LABEL block below.
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal:latest@sha256:08d4c70f1baf6537a0728656cf7942d561e74a35916509d205b6519861266352
+ARG BASE_IMAGE=registry.redhat.io/ubi9/ubi-minimal-pqc:9.8@sha256:d638f3b49b79575329aacdae2739f954effe2467c12147711e73445c4fc97819
+FROM ${BASE_IMAGE}
+ARG BASE_IMAGE
 
 # Keep in sync with main.py PROMPTFOO_VERSION.
 ARG PROMPTFOO_VERSION=0.123.1
@@ -56,3 +61,14 @@ ENV PYTHONUNBUFFERED=1 \
 USER 1001
 
 ENTRYPOINT ["python", "main.py"]
+
+LABEL com.redhat.component="odh-eval-hub-promptfoo-rhel9" \
+      name="rhoai/odh-eval-hub-promptfoo-rhel9" \
+      description="promptfoo framework adapter for eval-hub" \
+      summary="odh-eval-hub-promptfoo" \
+      maintainer="['managed-open-data-hub@redhat.com']" \
+      io.openshift.expose-services="" \
+      io.k8s.display-name="odh-eval-hub-promptfoo" \
+      io.k8s.description="promptfoo framework adapter for eval-hub" \
+      com.redhat.license_terms="https://www.redhat.com/licenses/Red_Hat_Standard_EULA_20191108.pdf" \
+      com.redhat.aiplatform.image="${BASE_IMAGE}"
