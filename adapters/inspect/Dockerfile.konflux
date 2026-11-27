@@ -8,7 +8,7 @@
 # ...). Plain ubi9/python-312 does not carry these libraries. The digest
 # pin below is what Renovate keeps updated. The cpu-torch2.13-el9.8
 # channel matches the production index in both requirements-rhoai files.
-ARG BASE_IMAGE=quay.io/aipcc/base-images/cpu-torch2.13-el9.8:1795577748@sha256:1c3232a8c4074d8f562207a3790204e185838a103aa8efdb74d5b9800fc907dd
+ARG BASE_IMAGE=quay.io/aipcc/base-images/cpu-torch2.13-el9.8:1795749612@sha256:5a1448c1b251ffeef4b44bca2f85c16232afb58bcdb2793a599db8446986be74
 FROM ${BASE_IMAGE}
 ARG BASE_IMAGE
 
