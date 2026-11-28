@@ -5,7 +5,7 @@
 # ubi9/python-312 installs the same wheel set but cannot import torch.
 # Pinned to the CPU torch 2.13 flavour, which matches torch==2.13.0 in
 # requirements-rhoai.txt and the package index that file installs from.
-ARG BASE_IMAGE=quay.io/aipcc/base-images/cpu-torch2.13-el9.8:1794626432@sha256:476fd5e296f058b2ebe029e530d065b2df079c06ac2e95c586bf6d6f86ce967b
+ARG BASE_IMAGE=quay.io/aipcc/base-images/cpu-torch2.13-el9.8:1795749612@sha256:5a1448c1b251ffeef4b44bca2f85c16232afb58bcdb2793a599db8446986be74
 FROM ${BASE_IMAGE}
 ARG BASE_IMAGE
 
